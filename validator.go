@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
@@ -648,7 +649,9 @@ func (vd *validator) unevalValidate() {
 				vd.addErr(vd.validateVal(s.UnevaluatedProperties, pvalue, pname))
 			}
 		}
-		vd.uneval.props = nil
+		if vd.uneval.props != nil {
+			vd.uneval.props = nil
+		}
 	}
 
 	// unevaluatedItems
@@ -656,7 +659,9 @@ func (vd *validator) unevalValidate() {
 		for i := range vd.uneval.items {
 			vd.addErr(vd.validateVal(s.UnevaluatedItems, arr[i], strconv.Itoa(i)))
 		}
-		vd.uneval.items = nil
+		if vd.uneval.items != nil {
+			vd.uneval.items = nil
+		}
 	}
 }
 
@@ -665,7 +670,8 @@ func (vd *validator) unevalValidate() {
 func (vd *validator) validateSelf(sch *Schema, refKw string, boolResult bool) error {
 	scp := vd.scp.child(sch, refKw, vd.scp.vid)
 	uneval := unevalFrom(vd.v, sch, !vd.uneval.isEmpty())
-	subvd := validator{
+	subvd := validatorPool.Get().(*validator)
+	*subvd = validator{
 		v:            vd.v,
 		vloc:         vd.vloc,
 		sch:          sch,
@@ -683,6 +689,7 @@ func (vd *validator) validateSelf(sch *Schema, refKw string, boolResult bool) er
 	uneval, err := subvd.validate()
 	if err == nil {
 		vd.uneval.merge(uneval)
+		release(subvd)
 	}
 	return err
 }
@@ -691,7 +698,8 @@ func (vd *validator) validateVal(sch *Schema, v any, vtok string) error {
 	vloc := append(vd.vloc, vtok)
 	scp := vd.scp.child(sch, "", vd.scp.vid+1)
 	uneval := unevalFrom(v, sch, false)
-	subvd := validator{
+	subvd := validatorPool.Get().(*validator)
+	*subvd = validator{
 		v:            v,
 		vloc:         vloc,
 		sch:          sch,
@@ -707,6 +715,9 @@ func (vd *validator) validateVal(sch *Schema, v any, vtok string) error {
 	}
 	subvd.handleMeta()
 	_, err := subvd.validate()
+	if err == nil {
+		release(subvd)
+	}
 	return err
 }
 
@@ -714,7 +725,8 @@ func (vd *validator) validateValue(sch *Schema, v any, vpath []string) error {
 	vloc := append(vd.vloc, vpath...)
 	scp := vd.scp.child(sch, "", vd.scp.vid+1)
 	uneval := unevalFrom(v, sch, false)
-	subvd := validator{
+	subvd := validatorPool.Get().(*validator)
+	*subvd = validator{
 		v:            v,
 		vloc:         vloc,
 		sch:          sch,
@@ -730,6 +742,9 @@ func (vd *validator) validateValue(sch *Schema, v any, vpath []string) error {
 	}
 	subvd.handleMeta()
 	_, err := subvd.validate()
+	if err == nil {
+		release(subvd)
+	}
 	return err
 }
 
@@ -883,8 +898,14 @@ type scope struct {
 	parent *scope
 }
 
+var scopePool = sync.Pool{New: func() any { return new(scope) }}
+var validatorPool = sync.Pool{New: func() any { return new(validator) }}
+var emptyUneval = &uneval{}
+
 func (sc *scope) child(sch *Schema, refKeyword string, vid int) *scope {
-	return &scope{sch, refKeyword, vid, sc}
+	c := scopePool.Get().(*scope)
+	*c = scope{sch, refKeyword, vid, sc}
+	return c
 }
 
 func (sc *scope) checkCycle() *scope {
@@ -924,24 +945,25 @@ type uneval struct {
 }
 
 func unevalFrom(v any, sch *Schema, callerNeeds bool) *uneval {
-	uneval := &uneval{}
 	switch v := v.(type) {
 	case map[string]any:
 		if !sch.allPropsEvaluated && (callerNeeds || sch.UnevaluatedProperties != nil) {
-			uneval.props = map[string]struct{}{}
+			ue := &uneval{props: map[string]struct{}{}}
 			for k := range v {
-				uneval.props[k] = struct{}{}
+				ue.props[k] = struct{}{}
 			}
+			return ue
 		}
 	case []any:
 		if !sch.allItemsEvaluated && (callerNeeds || sch.UnevaluatedItems != nil) && sch.numItemsEvaluated < len(v) {
-			uneval.items = map[int]struct{}{}
+			ue := &uneval{items: map[int]struct{}{}}
 			for i := sch.numItemsEvaluated; i < len(v); i++ {
-				uneval.items[i] = struct{}{}
+				ue.items[i] = struct{}{}
 			}
+			return ue
 		}
 	}
-	return uneval
+	return emptyUneval
 }
 
 func (ue *uneval) merge(other *uneval) {
@@ -980,4 +1002,14 @@ type ValidationError struct {
 type ErrorKind interface {
 	KeywordPath() []string
 	LocalizedString(*message.Printer) string
+}
+
+// release hands a finished record back; only after a pass, since an error
+// may still point at the scope.
+func release(v *validator) {
+	scp := v.scp
+	*v = validator{}
+	validatorPool.Put(v)
+	*scp = scope{}
+	scopePool.Put(scp)
 }
