@@ -890,8 +890,18 @@ type scope struct {
 	parent *scope
 }
 
-var scopePool = sync.Pool{New: func() any { return new(scope) }}
-var validatorPool = sync.Pool{New: func() any { return new(validator) }}
+// The records made for every value visited are reused: taken from these
+// pools when a value starts being checked, given back by release when its
+// check ends.
+var (
+	scopePool     = sync.Pool{New: func() any { return new(scope) }}
+	validatorPool = sync.Pool{New: func() any { return new(validator) }}
+)
+
+// emptyUneval is shared by every check that has nothing to track. It is
+// never written to: unevalFrom gives a record of its own to a schema with
+// unevaluatedProperties or unevaluatedItems, the only case where
+// unevalValidate assigns to it, and deleting from its nil maps does nothing.
 var emptyUneval = &uneval{}
 
 func (sc *scope) child(sch *Schema, refKeyword string, vid int) *scope {
