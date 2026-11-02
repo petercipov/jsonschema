@@ -649,9 +649,7 @@ func (vd *validator) unevalValidate() {
 				vd.addErr(vd.validateVal(s.UnevaluatedProperties, pvalue, pname))
 			}
 		}
-		if vd.uneval.props != nil {
-			vd.uneval.props = nil
-		}
+		vd.uneval.props = nil
 	}
 
 	// unevaluatedItems
@@ -659,9 +657,7 @@ func (vd *validator) unevalValidate() {
 		for i := range vd.uneval.items {
 			vd.addErr(vd.validateVal(s.UnevaluatedItems, arr[i], strconv.Itoa(i)))
 		}
-		if vd.uneval.items != nil {
-			vd.uneval.items = nil
-		}
+		vd.uneval.items = nil
 	}
 }
 
@@ -962,6 +958,10 @@ func unevalFrom(v any, sch *Schema, callerNeeds bool) *uneval {
 			}
 			return ue
 		}
+	}
+	if sch.UnevaluatedProperties != nil || sch.UnevaluatedItems != nil {
+		// unevalValidate writes to the record, so it must be its own.
+		return &uneval{}
 	}
 	return emptyUneval
 }

@@ -97,3 +97,58 @@ func TestValidateManyObjectsInParallel(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Rules about unevaluated properties and items write to their own records,
+// so the same must hold for them when checks run in parallel.
+func TestUnevaluatedInParallel(t *testing.T) {
+	schema := `{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"type": "object",
+		"properties": {"list": {"type": "array", "prefixItems": [{"type": "string"}], "unevaluatedItems": false}},
+		"unevaluatedProperties": false
+	}`
+	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := jsonschema.NewCompiler()
+	if err := c.AddResource("u.json", doc); err != nil {
+		t.Fatal(err)
+	}
+	sch, err := c.Compile("u.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parse := func(s string) any {
+		v, err := jsonschema.UnmarshalJSON(strings.NewReader(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	good := parse(`{"list":["a"]}`)
+	extraProperty := parse(`{"list":["a"],"other":1}`)
+	extraItem := parse(`{"list":["a",2]}`)
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				if err := sch.Validate(good); err != nil {
+					t.Error("good value rejected:", err)
+					return
+				}
+				if sch.Validate(extraProperty) == nil {
+					t.Error("extra property accepted")
+					return
+				}
+				if sch.Validate(extraItem) == nil {
+					t.Error("extra item accepted")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
