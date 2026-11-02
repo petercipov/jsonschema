@@ -685,8 +685,8 @@ func (vd *validator) validateSelf(sch *Schema, refKw string, boolResult bool) er
 	uneval, err := subvd.validate()
 	if err == nil {
 		vd.uneval.merge(uneval)
-		release(subvd)
 	}
+	release(subvd)
 	return err
 }
 
@@ -711,9 +711,7 @@ func (vd *validator) validateVal(sch *Schema, v any, vtok string) error {
 	}
 	subvd.handleMeta()
 	_, err := subvd.validate()
-	if err == nil {
-		release(subvd)
-	}
+	release(subvd)
 	return err
 }
 
@@ -738,9 +736,7 @@ func (vd *validator) validateValue(sch *Schema, v any, vpath []string) error {
 	}
 	subvd.handleMeta()
 	_, err := subvd.validate()
-	if err == nil {
-		release(subvd)
-	}
+	release(subvd)
 	return err
 }
 
@@ -1004,8 +1000,9 @@ type ErrorKind interface {
 	LocalizedString(*message.Printer) string
 }
 
-// release hands a finished record back; only after a pass, since an error
-// may still point at the scope.
+// release hands a finished record back, after a pass or a failure alike.
+// Errors keep no pointer to it: they copy the instance location and work out
+// the keyword location when they are made.
 func release(v *validator) {
 	scp := v.scp
 	*v = validator{}
